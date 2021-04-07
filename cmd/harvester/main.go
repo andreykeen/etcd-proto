@@ -10,6 +10,22 @@ import (
     "time"
 )
 
+var clientID string = "ee4f3f77-8b54-4e88-a993-5a5aa5217e82"
+
+
+func createTopic(cli *clientv3.Client, id string) {
+
+    ctx, cancel := context.WithTimeout(context.Background(), time.Second * 5)
+    resp, err := cli.Put(ctx, "/harvesters/states/" + id, "connected")
+    cancel()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Println(resp)
+}
+
+
 func main() {
 
     fmt.Printf("Run app %s\n", path.Base(os.Args[0]))
@@ -23,15 +39,17 @@ func main() {
     }
     defer cli.Close()
 
-    ctx, cancel := context.WithTimeout(context.Background(), time.Second * 5)
-    resp, err := cli.Get(ctx, "/harvesters/harv-001/status")
-    cancel()
-    if err != nil {
-        log.Fatal(err)
-    }
-    for _, ev := range resp.Kvs {
-        fmt.Printf("%s - %s\n", ev.Key, ev.Value)
-    }
+    createTopic(cli, clientID)
+
+    //ctx, cancel := context.WithTimeout(context.Background(), time.Second * 5)
+    //resp, err := cli.Get(ctx, "/harvesters/harv-001/status")
+    //cancel()
+    //if err != nil {
+    //   log.Fatal(err)
+    //}
+    //for _, ev := range resp.Kvs {
+    //   fmt.Printf("%s - %s\n", ev.Key, ev.Value)
+    //}
 
 
 
