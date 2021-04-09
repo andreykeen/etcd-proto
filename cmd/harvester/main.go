@@ -77,6 +77,7 @@ func main() {
 	}()
 	log.Printf("Open connection with etcd")
 
+	// Первичное создание ключей в etcd
 	createTopic(cli, harvUUID, keyTTL)
 
 	// TODO: Подписаться на key /cmd
@@ -88,14 +89,10 @@ func main() {
 	go doWorker(chWork)
 
 	// Обработка сигналов из ОС
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
 
-	select {
-	case sig := <-sigs:
-		log.Printf("Catch %s signal. Exit initialization", sig.String())
-		chWork <- "exit"
-	}
-
+	log.Printf("Catch %s signal. Exit initialization", sig.String())
 	log.Printf("End %s\n", path.Base(os.Args[0]))
 }

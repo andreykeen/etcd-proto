@@ -6,19 +6,9 @@ import (
 	"time"
 )
 
-type (
-	Client *clientv3.Client
-	Config clientv3.Config
-)
-
 type Lease struct {
 	ID  clientv3.LeaseID
 	TTL time.Duration
-}
-
-
-func New() {
-
 }
 
 func KeyPutWithIgnoreLease(cli *clientv3.Client, key, value string) error {
