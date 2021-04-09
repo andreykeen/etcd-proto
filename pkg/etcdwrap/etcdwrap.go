@@ -6,12 +6,22 @@ import (
 	"time"
 )
 
+type (
+	Client *clientv3.Client
+	Config clientv3.Config
+)
+
 type Lease struct {
 	ID  clientv3.LeaseID
 	TTL time.Duration
 }
 
-func keyPutWithIgnoreLease(cli *clientv3.Client, key, value string) error {
+
+func New() {
+
+}
+
+func KeyPutWithIgnoreLease(cli *clientv3.Client, key, value string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	_, err := cli.Put(ctx, key, value, clientv3.WithIgnoreLease())
@@ -19,7 +29,7 @@ func keyPutWithIgnoreLease(cli *clientv3.Client, key, value string) error {
 	return err
 }
 
-func keyPutWithLease(cli *clientv3.Client, key, value string, lease clientv3.LeaseID) error {
+func KeyPutWithLease(cli *clientv3.Client, key, value string, lease clientv3.LeaseID) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	_, err := cli.Put(ctx, key, value, clientv3.WithLease(lease))
@@ -27,7 +37,7 @@ func keyPutWithLease(cli *clientv3.Client, key, value string, lease clientv3.Lea
 	return err
 }
 
-func leaseGrand(cli *clientv3.Client, ttl time.Duration) (Lease, error) {
+func LeaseGrand(cli *clientv3.Client, ttl time.Duration) (Lease, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	res, err := cli.Lease.Grant(ctx, int64(ttl.Seconds()))

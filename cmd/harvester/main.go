@@ -1,9 +1,9 @@
 package main
 
 import (
-	"context"
 	"github.com/google/uuid"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"harvester/pkg/etcdwrap"
 	"log"
 	"os"
 	"os/signal"
@@ -12,10 +12,6 @@ import (
 	"time"
 )
 
-type TopicLease struct {
-	ID  clientv3.LeaseID
-	TTL time.Duration
-}
 
 var (
 	etcdDialTimeout    time.Duration = time.Second * 10
@@ -23,47 +19,20 @@ var (
 	keyTTL             time.Duration = time.Second * 300
 )
 
-func keyPutWithIgnoreLease(cli *clientv3.Client, key, value string) {
-
-	ctx, cancel := context.WithTimeout(context.Background(), etcdRequestTimeout)
-	_, err := cli.Put(ctx, key, value, clientv3.WithIgnoreLease())
-	cancel()
-	if err != nil {
-		log.Fatal(err)
-	}
-}
-
-func keyPutWithLease(cli *clientv3.Client, key, value string, lease clientv3.LeaseID) {
-
-	ctx, cancel := context.WithTimeout(context.Background(), etcdRequestTimeout)
-	_, err := cli.Put(ctx, key, value, clientv3.WithLease(lease))
-	cancel()
-	if err != nil {
-		log.Fatal(err)
-	}
-}
-
-func leaseGrand(cli *clientv3.Client, ttl time.Duration) TopicLease {
-
-	ctx, cancel := context.WithTimeout(context.Background(), etcdRequestTimeout)
-	res, err := cli.Lease.Grant(ctx, int64(ttl.Seconds()))
-	cancel()
-	if err != nil {
-		log.Fatal(err)
-	}
-	return TopicLease{ID: res.ID, TTL: time.Duration(res.TTL) * time.Second}
-}
 
 func createTopic(cli *clientv3.Client, id uuid.UUID, ttl time.Duration) {
 
 	// Grand lease for topic
-	topicLease := leaseGrand(cli, ttl)
+	topicLease, err := etcdwrap.LeaseGrand(cli, ttl)
+	if err != nil {
+		log.Fatalf("Can not granted lease: %s", err)
+	}
 	log.Printf("Lease %x granted with %.0fs TTL", topicLease.ID, topicLease.TTL.Seconds())
 
 	// Создание key=value
-	keyPutWithLease(cli, "/harvesters/"+id.String()+"/state", "connected", topicLease.ID)
-	keyPutWithLease(cli, "/harvesters/"+id.String()+"/url", "nil", topicLease.ID)
-	keyPutWithLease(cli, "/harvesters/"+id.String()+"/cmd", "nil", topicLease.ID)
+	etcdwrap.KeyPutWithLease(cli, "/harvesters/"+id.String()+"/state", "connected", topicLease.ID)
+	etcdwrap.KeyPutWithLease(cli, "/harvesters/"+id.String()+"/url", "nil", topicLease.ID)
+	etcdwrap.KeyPutWithLease(cli, "/harvesters/"+id.String()+"/cmd", "nil", topicLease.ID)
 }
 
 func doWorker(ch <-chan string) {
