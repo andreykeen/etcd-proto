@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"github.com/google/uuid"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"harvester/pkg/etcdwrap"
@@ -15,10 +16,10 @@ import (
 var (
 	etcdDialTimeout    time.Duration = time.Second * 10
 	etcdRequestTimeout time.Duration = time.Second * 10
-	keyTTL             time.Duration = time.Second * 300
+	keyTTL             time.Duration = time.Second * 30
 )
 
-func createTopic(cli *clientv3.Client, id uuid.UUID, ttl time.Duration) {
+func createTopic(cli *clientv3.Client, id uuid.UUID, ttl time.Duration) etcdwrap.Lease {
 
 	// Grand lease for topic
 	topicLease, err := etcdwrap.LeaseGrand(cli, ttl)
@@ -31,6 +32,8 @@ func createTopic(cli *clientv3.Client, id uuid.UUID, ttl time.Duration) {
 	etcdwrap.KeyPutWithLease(cli, "/harvesters/"+id.String()+"/state", "connected", topicLease.ID)
 	etcdwrap.KeyPutWithLease(cli, "/harvesters/"+id.String()+"/url", "nil", topicLease.ID)
 	etcdwrap.KeyPutWithLease(cli, "/harvesters/"+id.String()+"/cmd", "nil", topicLease.ID)
+
+	return topicLease
 }
 
 func doWorker(ch chan string) {
@@ -61,6 +64,7 @@ func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmsgprefix)
 	log.SetPrefix("[" + harvUUID.String() + "] ")
 	log.Printf("Run %s\n", path.Base(os.Args[0]))
+	defer log.Printf("End %s\n", path.Base(os.Args[0]))
 
 	// Создание подключения к Etcd
 	cli, err := clientv3.New(clientv3.Config{
@@ -76,8 +80,20 @@ func main() {
 	}()
 	log.Printf("Open connection with etcd")
 
-	// Первичное создание ключей в etcd
-	createTopic(cli, harvUUID, keyTTL)
+	//----- Первичное создание ключей в etcd
+	topicLease := createTopic(cli, harvUUID, keyTTL)
+
+	//----- Keep alive lease
+	ctxKA, cancelKA := context.WithCancel(context.Background())
+	chKA, errKA := cli.KeepAlive(ctxKA, topicLease.ID)
+	if errKA != nil {
+		log.Fatalf("Can not run Keep Alive: %s", errKA)
+	}
+	defer func() {
+		cancelKA()
+		log.Println("Waiting KeepAlive goroutine...")
+		<-chKA
+	}()
 
 	// TODO: Подписаться на key /cmd
 	//chCmd := cli.Watch(context.Background(), "/harvesters/"+harvUUID.String()+"/cmd", clientv3.WithProgressNotify())
@@ -87,6 +103,11 @@ func main() {
 
 	chWork := make(chan string)
 	go doWorker(chWork)
+	defer func() {
+		chWork <- "exit"
+		log.Println("Waiting doWorker goroutine...")
+		<-chWork
+	}()
 
 	// Обработка сигналов из ОС
 	quit := make(chan os.Signal, 1)
@@ -94,12 +115,4 @@ func main() {
 	sig := <-quit
 	log.Printf("Catch %s signal. Exit initialization", sig.String())
 
-	// Отправка сообщений о завершении работы
-	chWork <- "exit"
-
-	// Ожидание goroutines
-	log.Println("Waiting doWorker goroutine...")
-	<-chWork
-
-	log.Printf("End %s\n", path.Base(os.Args[0]))
 }
