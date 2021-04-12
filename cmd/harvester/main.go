@@ -12,13 +12,11 @@ import (
 	"time"
 )
 
-
 var (
 	etcdDialTimeout    time.Duration = time.Second * 10
 	etcdRequestTimeout time.Duration = time.Second * 10
 	keyTTL             time.Duration = time.Second * 300
 )
-
 
 func createTopic(cli *clientv3.Client, id uuid.UUID, ttl time.Duration) {
 
@@ -35,7 +33,7 @@ func createTopic(cli *clientv3.Client, id uuid.UUID, ttl time.Duration) {
 	etcdwrap.KeyPutWithLease(cli, "/harvesters/"+id.String()+"/cmd", "nil", topicLease.ID)
 }
 
-func doWorker(ch <-chan string) {
+func doWorker(ch chan string) {
 	n := 0
 	for {
 		time.Sleep(time.Millisecond * 100)
@@ -48,6 +46,7 @@ func doWorker(ch <-chan string) {
 		select {
 		case msg := <-ch:
 			log.Printf("doWork end with msg: %s", msg)
+			ch <- "done"
 			return
 		default:
 		}
@@ -81,6 +80,7 @@ func main() {
 	createTopic(cli, harvUUID, keyTTL)
 
 	// TODO: Подписаться на key /cmd
+	//chCmd := cli.Watch(context.Background(), "/harvesters/"+harvUUID.String()+"/cmd", clientv3.WithProgressNotify())
 
 	//TODO: Тяжёлая инициализация
 	// После которой необходимо изменить значение ключа /harvesters/uuid/state с 'connected' на 'ready'
@@ -91,8 +91,15 @@ func main() {
 	// Обработка сигналов из ОС
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
+	sig := <-quit
 	log.Printf("Catch %s signal. Exit initialization", sig.String())
+
+	// Отправка сообщений о завершении работы
+	chWork <- "exit"
+
+	// Ожидание goroutines
+	log.Println("Waiting doWorker goroutine...")
+	<-chWork
+
 	log.Printf("End %s\n", path.Base(os.Args[0]))
 }
