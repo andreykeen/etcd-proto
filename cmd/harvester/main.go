@@ -36,7 +36,6 @@ func createTopic(cli *clientv3.Client, id uuid.UUID, ttl time.Duration) etcdwrap
     return topicLease
 }
 
-
 func handlerRecog(ctx context.Context) <-chan bool {
     ch := make(chan bool)
     go func() {
@@ -62,6 +61,11 @@ func handlerRecog(ctx context.Context) <-chan bool {
     return ch
 }
 
+func watchHandler() {
+
+}
+
+
 func main() {
 
     // Генерация UUID. Является идентификатором харвестера
@@ -86,10 +90,12 @@ func main() {
     }()
     log.Printf("Open connection with etcd")
 
+
     // Первичное создание ключей в etcd
     topicLease := createTopic(cli, harvUUID, keyTTL)
 
-    // Keep alive lease
+
+    // Run KeepAlive goroutine
     ctxKA, cancelKA := context.WithCancel(context.Background())
     chKA, errKA := cli.KeepAlive(ctxKA, topicLease.ID)
     if errKA != nil {
@@ -101,19 +107,29 @@ func main() {
         <-chKA
     }()
 
-    // TODO: Подписаться на key /cmd
+
+    // Run Watcher goroutine
+    // Подписка на изменение ключа '/harvesters/UUID/cmd'
     ctxWatch, cancelWatch := context.WithCancel(context.Background())
     chWatch := cli.Watch(ctxWatch, "/harvesters/"+harvUUID.String()+"/cmd")
     defer func() {
         cancelWatch()
         log.Println("Waiting disable Watch...")
         <-chWatch
+        log.Println("End Watch")
+    }()
+    go func() {
+        log.Println("Run watchHandler goroutine")
+        for resp := range chWatch {
+            for _, ev := range resp.Events {
+                log.Printf("%s %q : %q", ev.Type, ev.Kv.Key, ev.Kv.Value)
+            }
+        }
+        log.Println("End watchHandler goroutine")
     }()
 
 
-    //TODO: Тяжёлая инициализация
-    // После которой необходимо изменить значение ключа /harvesters/uuid/state с 'connected' на 'ready'
-
+    // Run Handler Test goroutine
     ctxH, cancelH := context.WithCancel(context.Background())
     chH := handlerRecog(ctxH)
     defer func() {
@@ -128,5 +144,4 @@ func main() {
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
     sig := <-quit
     log.Printf("Catch %s signal. Exit initialization", sig.String())
-
 }

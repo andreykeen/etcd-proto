@@ -34,3 +34,7 @@ func LeaseGrand(cli *clientv3.Client, ttl time.Duration) (Lease, error) {
 	cancel()
 	return Lease{ID: res.ID, TTL: time.Duration(res.TTL) * time.Second}, err
 }
+
+func WatchHandleFunc(cli *clientv3.Client, key string) {
+
+}
