@@ -3,12 +3,17 @@ package etcdwrap
 import (
 	"context"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"log"
 	"time"
 )
 
 type Lease struct {
 	ID  clientv3.LeaseID
 	TTL time.Duration
+}
+
+type WatchHandlerAttr struct {
+	CLI *clientv3.Client
 }
 
 func KeyPutWithIgnoreLease(cli *clientv3.Client, key, value string) error {
@@ -35,6 +40,17 @@ func LeaseGrand(cli *clientv3.Client, ttl time.Duration) (Lease, error) {
 	return Lease{ID: res.ID, TTL: time.Duration(res.TTL) * time.Second}, err
 }
 
-func WatchHandleFunc(cli *clientv3.Client, key string) {
+func WatchHandleFunc(ctx context.Context, cli *clientv3.Client, key string, handler func(watchAttr WatchHandlerAttr, respKey, respValue string)) {
 
+	ch := cli.Watch(ctx, key)
+	go func() {
+		log.Printf("Run watching for key: '%s'", key)
+		for resp := range ch {
+			for _, ev := range resp.Events {
+				log.Printf("%s %q : %q", ev.Type, ev.Kv.Key, ev.Kv.Value)
+				handler(WatchHandlerAttr{CLI: cli}, string(ev.Kv.Key), string(ev.Kv.Value))
+			}
+		}
+		log.Printf("End watching for key: '%s'", key)
+	}()
 }
