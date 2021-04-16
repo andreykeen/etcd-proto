@@ -16,39 +16,53 @@ type WatchHandlerAttr struct {
     CLI *clientv3.Client
 }
 
-func KeyPutWithIgnoreLease(cli *clientv3.Client, key, value string) error {
+var client *clientv3.Client
 
-    ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-    _, err := cli.Put(ctx, key, value, clientv3.WithIgnoreLease())
-    cancel()
+func CreatConnection(config clientv3.Config) (err error) {
+    client, err = clientv3.New(config)
+    return
+}
+
+func CloseConnection() error {
+    err := client.Close()
     return err
 }
 
-func KeyPutWithLease(cli *clientv3.Client, key, value string, lease clientv3.LeaseID) error {
-
+func LeaseGrand(ttl time.Duration) (Lease, error) {
     ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-    _, err := cli.Put(ctx, key, value, clientv3.WithLease(lease))
-    cancel()
-    return err
-}
-
-func LeaseGrand(cli *clientv3.Client, ttl time.Duration) (Lease, error) {
-
-    ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-    res, err := cli.Lease.Grant(ctx, int64(ttl.Seconds()))
+    res, err := client.Lease.Grant(ctx, int64(ttl.Seconds()))
     cancel()
     return Lease{ID: res.ID, TTL: time.Duration(res.TTL) * time.Second}, err
 }
 
-func WatchHandleFunc(ctx context.Context, cli *clientv3.Client, key string, handler func(watchAttr WatchHandlerAttr, respKey, respValue string)) {
+func KeepAlive(ctx context.Context, lease clientv3.LeaseID) (<-chan *clientv3.LeaseKeepAliveResponse, error) {
+    ch, err := client.KeepAlive(ctx, lease)
+    return ch, err
+}
 
-    ch := cli.Watch(ctx, key)
+func KeyPutWithIgnoreLease(key, value string) error {
+    ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+    _, err := client.Put(ctx, key, value, clientv3.WithIgnoreLease())
+    cancel()
+    return err
+}
+
+func KeyPutWithLease(key, value string, lease clientv3.LeaseID) error {
+    ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+    _, err := client.Put(ctx, key, value, clientv3.WithLease(lease))
+    cancel()
+    return err
+}
+
+
+func WatchHandleFunc(ctx context.Context, key string, handler func(WatchHandlerAttr, clientv3.Event)) {
+
+    ch := client.Watch(ctx, key)
     go func() {
         log.Printf("Run watching for key: '%s'", key)
         for resp := range ch {
             for _, ev := range resp.Events {
-                log.Printf("%s %q : %q", ev.Type, ev.Kv.Key, ev.Kv.Value)
-                handler(WatchHandlerAttr{CLI: cli}, string(ev.Kv.Key), string(ev.Kv.Value))
+                handler(WatchHandlerAttr{CLI: client}, *ev)
             }
         }
         log.Printf("End watching for key: '%s'", key)

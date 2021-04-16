@@ -19,50 +19,49 @@ var (
 	keyTTL             time.Duration = time.Second * 30
 )
 
-func createTopic(cli *clientv3.Client, id uuid.UUID, ttl time.Duration) etcdwrap.Lease {
+func createTopic(ctx context.Context, id uuid.UUID, ttl time.Duration) {
 
 	// Grand lease for topic
-	topicLease, err := etcdwrap.LeaseGrand(cli, ttl)
+	topicLease, err := etcdwrap.LeaseGrand(ttl)
 	if err != nil {
 		log.Fatalf("Can not granted lease: %s", err)
 	}
 	log.Printf("Lease %x granted with %.0fs TTL", topicLease.ID, topicLease.TTL.Seconds())
 
-	// Создание key=value
-	etcdwrap.KeyPutWithLease(cli, "/harvesters/"+id.String()+"/state", "connected", topicLease.ID)
-	etcdwrap.KeyPutWithLease(cli, "/harvesters/"+id.String()+"/url", "nil", topicLease.ID)
-	etcdwrap.KeyPutWithLease(cli, "/harvesters/"+id.String()+"/cmd", "nil", topicLease.ID)
+    // Run KeepAlive goroutine
+    // Требует отмены контекста для остановки goroutine
+    _, errKA := etcdwrap.KeepAlive(ctx, topicLease.ID)
+    if errKA != nil {
+        log.Fatalf("Can not run Keep Alive: %s", errKA)
+    }
 
-	return topicLease
+    // Создание key,value
+	err = etcdwrap.KeyPutWithLease("/harvesters/"+id.String()+"/state", "connected", topicLease.ID)
+	if err != nil {
+        log.Fatalf("Can not put KeyValue: %s", err)
+    }
+    log.Printf("Create key: %q : %q", "/harvesters/"+id.String()+"/state", "connected")
+
+	err = etcdwrap.KeyPutWithLease("/harvesters/"+id.String()+"/url", "nil", topicLease.ID)
+    if err != nil {
+        log.Fatalf("Can not put KeyValue: %s", err)
+    }
+    log.Printf("Create key: %q : %q", "/harvesters/"+id.String()+"/url", "nil")
+
+	err = etcdwrap.KeyPutWithLease("/harvesters/"+id.String()+"/cmd", "nil", topicLease.ID)
+    if err != nil {
+        log.Fatalf("Can not put KeyValue: %s", err)
+    }
+    log.Printf("Create key: %q : %q", "/harvesters/"+id.String()+"/cmd", "nil")
+
+    // Run Watcher goroutine
+    // Подписка на изменение ключа '/harvesters/UUID/cmd'
+    etcdwrap.WatchHandleFunc(ctx, "/harvesters/"+id.String()+"/cmd", handlerCmd)
 }
 
-func handlerRecog(ctx context.Context) <-chan bool {
-	ch := make(chan bool)
-	go func() {
-		n := 0
-		for {
-			time.Sleep(time.Millisecond * 100)
-			n++
-			if n > 50 {
-				n = 0
-				log.Printf("Idle handlerRecog")
-			}
 
-			select {
-			case <-ctx.Done():
-				log.Println("handlerRecog ended")
-				//ch <- true
-				close(ch)
-				return
-			default:
-			}
-		}
-	}()
-	return ch
-}
-
-func handlerCmd(watchAttr etcdwrap.WatchHandlerAttr, key, value string) {
-	log.Printf("FUNC: %s : %s", key, value)
+func handlerCmd(watchAttr etcdwrap.WatchHandlerAttr, event clientv3.Event) {
+    log.Printf("handlerCmd: %s %q : %q", event.Type, event.Kv.Key, event.Kv.Value)
 }
 
 func main() {
@@ -70,13 +69,14 @@ func main() {
 	// Генерация UUID. Является идентификатором харвестера
 	harvUUID := uuid.New()
 
+	// Конфигурирование логирования
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmsgprefix)
 	log.SetPrefix("[" + harvUUID.String() + "] ")
 	log.Printf("Run %s\n", path.Base(os.Args[0]))
 	defer log.Printf("End %s\n", path.Base(os.Args[0]))
 
 	// Создание подключения к Etcd
-	cli, err := clientv3.New(clientv3.Config{
+	err := etcdwrap.CreatConnection(clientv3.Config{
 		Endpoints:   []string{"127.0.0.1:2379"},
 		DialTimeout: etcdDialTimeout,
 	})
@@ -85,42 +85,25 @@ func main() {
 	}
 	defer func() {
 		log.Printf("Close connection with etcd")
-		cli.Close()
-	}()
+		err = etcdwrap.CloseConnection()
+        if err != nil {
+            log.Printf("Can not correctly closed connection with etcd: %s", err)
+        }
+    }()
 	log.Printf("Open connection with etcd")
 
-	// Первичное создание ключей в etcd
-	topicLease := createTopic(cli, harvUUID, keyTTL)
 
-	// Run KeepAlive goroutine
-	ctxKA, cancelKA := context.WithCancel(context.Background())
-	chKA, errKA := cli.KeepAlive(ctxKA, topicLease.ID)
-	if errKA != nil {
-		log.Fatalf("Can not run Keep Alive: %s", errKA)
-	}
-	defer func() {
-		cancelKA()
-		log.Println("Waiting KeepAlive goroutine...")
-		<-chKA
-	}()
+	// Основной контекст для передачи в другие goroutine
+    ctxMain, cancelMain := context.WithCancel(context.Background())
+    defer func() {
+        log.Println("Cancelling goroutine...")
+        cancelMain()
+    }()
 
-	// Run Watcher goroutine
-	// Подписка на изменение ключа '/harvesters/UUID/cmd'
-	ctxWatch, cancelWatch := context.WithCancel(context.Background())
-	etcdwrap.WatchHandleFunc(ctxWatch, cli, "/harvesters/"+harvUUID.String()+"/cmd", handlerCmd)
-	defer func() {
-		cancelWatch()
-		log.Println("Waiting disable WatchHandleFunc...")
-	}()
 
-	// Run Handler Test goroutine
-	ctxH, cancelH := context.WithCancel(context.Background())
-	chH := handlerRecog(ctxH)
-	defer func() {
-		cancelH()
-		log.Println("Waiting handlerRecog goroutine...")
-		<-chH
-	}()
+	// Создание ключей в etcd, запуск KeepAlive и Watchers
+	createTopic(ctxMain, harvUUID, keyTTL)
+
 
 	// Обработка сигналов из ОС
 	quit := make(chan os.Signal, 1)
